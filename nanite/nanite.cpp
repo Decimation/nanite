@@ -1,69 +1,119 @@
 // nanite.cpp : This hSerial contains the 'main' function. Program execution begins and ends there.
 //
 
-#include <iostream>
-#include <stdio.h>
-#include <Windows.h>
-#include <print>
-#include <stdio.h>
-#include <conio.h>
-#include <string.h>
+#include "nanite.h"
+
 /*
  * minicom -b 115200 -o -D /dev/ttyS0
  */
+template <typename T>
+
+void run(std::function<T()> fn)
+{
+	auto k = fn();
+	if (!k) {
+		fail(GetLastError(), std::format("{0}", k));
+	}
+}
+
+void fail(DWORD error, const std::string msg)
+{
+	std::println(std::cerr, "{0} / {1}", error, msg);
+
+	std::exit(error);
+}
+void system_error(const char* name) {
+	// Retrieve, format, and print out a message from the last error.  The 
+	// `name' that's passed should be in the form of a present tense noun 
+	// (phrase) such as "opening file".
+	//
+	char* ptr = NULL;
+	FormatMessage(
+		FORMAT_MESSAGE_ALLOCATE_BUFFER |
+		FORMAT_MESSAGE_FROM_SYSTEM,
+		0,
+		GetLastError(),
+		0,
+		LPWSTR((char*)&ptr),
+		1024,
+		NULL);
+
+	fprintf(stderr, "\nError %s: %s\n", name, ptr);
+	LocalFree(ptr);
+}
 
 int main()
 {
-	DWORD retVal = 0;
+	DWORD  retVal = 0;
 	HANDLE hSerial;
-	hSerial = CreateFile(
-		TEXT("COM5"),
-		GENERIC_READ | GENERIC_WRITE,
-		0,
-		0,
-		OPEN_EXISTING,
-		FILE_ATTRIBUTE_NORMAL,
-		0);
+	COMMTIMEOUTS timeouts;
+
+	hSerial = CreateFile(TEXT("COM5"),
+	                     GENERIC_READ | GENERIC_WRITE,
+	                     0,
+	                     0,
+	                     TRUNCATE_EXISTING,
+	                     FILE_ATTRIBUTE_NORMAL,
+	                     0);
 
 	if (hSerial == INVALID_HANDLE_VALUE) {
-		if (GetLastError() == ERROR_FILE_NOT_FOUND) {
-			//serial port does not exist. Inform user.
-		}
+		fail();
 		//some other error occurred. Inform user.
 	}
 
-	BYTE Byte;
-	DWORD dwBytesTransferred;
 	DWORD dwCommModemStatus;
-
+	DWORD mode;
 	DCB dcbSerialParams = {
-		.DCBlength = 0,
+		.DCBlength = sizeof(dcbSerialParams),
 		// .BaudRate = CBR_115200,
 		// .ByteSize = 8,
 		// .StopBits = ONESTOPBIT,
 		// .Parity = NOPARITY,
 	};
+
 	dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
-	if (!GetCommState(hSerial, &dcbSerialParams)) {
-		//error getting state
-		std::print("{0}", GetLastError());
-	}
+
+	GetCommState(hSerial, &dcbSerialParams);
+
 	dcbSerialParams.BaudRate = CBR_115200;
 	dcbSerialParams.ByteSize = 8;
 	dcbSerialParams.StopBits = ONESTOPBIT;
-	dcbSerialParams.Parity = NOPARITY;
-	if (!SetCommState(hSerial, &dcbSerialParams)) {
-		//error setting serial port state
-		std::print("{0}", GetLastError());
-	}
+	dcbSerialParams.Parity   = NOPARITY;
+
+	SetCommState(hSerial, &dcbSerialParams);
 
 	SetCommMask(hSerial, EV_RXCHAR | EV_ERR); //receive character event
+
 	WaitCommEvent(hSerial, &dwCommModemStatus, 0); //wait for character
-	char buffer[1];
-	DWORD read, written;
+
+	char   buffer[1];
+	DWORD  read, written;
 	HANDLE keyboard = GetStdHandle(STD_INPUT_HANDLE);
-	HANDLE screen = GetStdHandle(STD_OUTPUT_HANDLE);
-	char ch;
+	HANDLE screen   = GetStdHandle(STD_OUTPUT_HANDLE);
+	char   ch;
+
+	timeouts.ReadIntervalTimeout = 1;
+	timeouts.ReadTotalTimeoutMultiplier = 1;
+	timeouts.ReadTotalTimeoutConstant = 1;
+	timeouts.WriteTotalTimeoutMultiplier = 1;
+	timeouts.WriteTotalTimeoutConstant = 1;
+
+	if (!SetCommTimeouts(hSerial, &timeouts))
+		system_error("setting port time-outs.");
+
+	// set keyboard to raw reading.
+	if (!GetConsoleMode(keyboard, &mode))
+		system_error("getting keyboard mode");
+	mode &= ~ENABLE_PROCESSED_INPUT;
+	if (!SetConsoleMode(keyboard, mode))
+		system_error("setting keyboard mode");
+
+	if (!EscapeCommFunction(hSerial, CLRDTR))
+		system_error("clearing DTR");
+	Sleep(200);
+	if (!EscapeCommFunction(hSerial, SETDTR))
+		system_error("setting DTR");
+
 	do {
 		// check for data on port and display it on screen.
 		ReadFile(hSerial, buffer, sizeof(buffer), &read, NULL);
@@ -71,8 +121,9 @@ int main()
 			WriteFile(screen, buffer, read, &written, NULL);
 
 		// check for keypress, and write any out the port.
-		if (_kbhit()) {
-			ch = getchar();
+		if (kbhit()) {
+			ch = _getch();
+			OutputDebugString(LPCWSTR(std::format("{0}", ch).c_str()));
 			WriteFile(hSerial, &ch, 1, &written, NULL);
 		}
 		// until user hits ctrl-backspace.
